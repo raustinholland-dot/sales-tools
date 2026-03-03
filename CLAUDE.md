@@ -123,19 +123,33 @@ CLAUDE.md                           # This file
 
 ```
 Gmail Trigger (every 1 min)
-  → Workflow 1: Ingestion Pipeline
+  → Workflow 1 (CW-01): Deal Ingestion Pipeline
+      → emails, transcripts, PDFs, PPTX, CSV
       → classify → dedupe → chunk → embed → Qdrant insert
       → POST /webhook/deal-health-trigger
-          → Workflow 2: Deal Health Agent
+          → Workflow 2 (CW-02): Deal Health Agent
               → 15 RAG queries (one per CPS dimension)
               → Claude Opus scores all 22 artifacts
               → Postgres: insert to deal_health table
+              → POST /webhook/ad-tracker-trigger
+                  → Workflow 5a (CW-05 AD Tracker): gap assessment + approach doc
               → Nightly rescore also runs at 9pm ET
 
+Power Automate (Outlook calendar trigger)
+  → POST /webhook/calendar-event-ingest
+      → Workflow 5b (CW-05: Calendar Event Ingestion)
+          → parse attendees → derive deal_id from external domain
+          → Postgres: upsert deal + insert calendar_events
+          → POST /webhook/deal-health-trigger → CW-02 (calendar_only zero-score if no other docs)
+  NOTE: Calendar events do NOT go through Gmail or CW-01.
+  To test synthetically: POST JSON directly to /webhook/calendar-event-ingest
+  Required fields: subject, start, end, organizer, attendees (semicolon-separated emails),
+                   eventId, location, bodyContent
+
 n8n Chat Widget
-  → Workflow 4: Q&A Chat Agent (Phase 4, pending)
+  → Workflow 4 (CW-04): Q&A Chat Agent
       → POST /webhook/output-request
-          → Workflow 3: Output Generation Agent
+          → Workflow 3 (CW-03): Output Generation Agent
               → retrieve output history → RAG → Claude generates
               → Gmail send to Austin's Outlook
               → Postgres: log to outputs_log

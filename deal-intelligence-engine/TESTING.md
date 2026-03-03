@@ -1,9 +1,48 @@
 # Clearwater Deal Intelligence Engine — Testing Guide
 
 **Phases 1–5**: Ingestion, Deal Health, Output Gen, Chat Agent, AD Tracker
-**Version**: 4.0
-**Last Updated**: March 1, 2026
+**Version**: 5.0
+**Last Updated**: March 2, 2026
 **Test Deal**: Velentium (velentium.com) — real active deal
+
+---
+
+## Next Session — Start Here (2026-03-02)
+
+**DO NOT wipe the system.** 4 pending drafts exist in `outputs_log` needed for approve flow testing.
+
+### Current System State
+- `deals`: 1 row — `cw_velentiummedical_2026`, stage=Discover, is_active=true
+- `ingestion_log`: 2 rows — 1 calendar_invite + 1 transcript (8 chunks)
+- `deal_health`: 2 rows — calendar_only zero-score + real Opus score (15/30, CAS=2A)
+- `outputs_log`: 4 rows, all status='draft' — pricing_request (ID:1), follow_up_email (ID:2), internal_team_update (ID:3), internal_team_update (ID:4)
+- `attribution_queue`: 0 rows (clean)
+- Qdrant: vectors present for Velentium transcript
+- Chat widget: surfacing all 4 drafts correctly on session start ✓
+
+### Tests 1, 1a, 2, 3: COMPLETE ✓
+All passed cleanly on 2026-03-02. Do not re-run unless system is wiped.
+
+### Next Test: Approve Flow (Test 4)
+
+**Objective**: Open chat, review the follow-up email draft, approve it, verify it sends.
+
+**Steps**:
+1. Open `http://localhost:5678/webhook/cw04a-0001-0000-0000-000000000001/chat` (clear browser storage first if returning from previous session)
+2. Send "hey" — confirm 4 drafts surface
+3. Ask to see Draft 2 (follow-up email) — confirm full body displays in chat
+4. Say "send it" — confirm approve_output is called with draft_id=2
+5. Verify in Postgres: `SELECT status FROM outputs_log WHERE id=2;` → should be 'sent'
+6. Verify email arrived at austin.holland@clearwatersecurity.com
+
+**Edit flow test (Test 4b)**:
+1. Ask to see Draft 1 (pricing request)
+2. Ask to edit a line in it
+3. Confirm the edited version in chat, say "send it"
+4. Verify the edited body was sent (check outputs_log.full_content for id=1 after approval)
+
+### Known Outstanding Issues
+- `Is Deal Declining?` node in CW-02 — crashes when referencing `Code: Parse Scores` on calendar-only path. Low priority (non-blocking). Fix next session.
 
 ---
 
@@ -54,60 +93,38 @@ Each test builds on the previous one — run them in order.
 
 ### Test 1: Discovery Call Calendar Invite (New Deal — First Artifact)
 
-**Objective**: System sees Velentium for the first time via a forwarded calendar invite.
-Must classify as `calendar_invite`, create a new deal record, and store vectors with correct payload.
+**Objective**: System sees Velentium for the first time via a calendar event from Power Automate.
+Must create a new deal record, insert a `calendar_events` row, and trigger CW-02 with a `calendar_only` zero-score.
 
-**What to send**: Forward (or manually compose) an email to the ingestion inbox that looks like
-a forwarded Google Calendar invite for a Velentium discovery call.
+**How calendar events actually work**:
+- Austin accepts/sends a calendar invite in Outlook
+- Power Automate detects the calendar event and POSTs JSON to `POST /webhook/calendar-event-ingest` (CW-05)
+- CW-05 parses attendees, derives `deal_id` from the first external attendee domain, upserts the deal, and triggers CW-02
+- **Calendar events do NOT go through Gmail or CW-01**
 
-**Send to**: `raustinholland+echo@gmail.com`
-
-**Sample email body**:
+**To test synthetically** (no real calendar invite needed):
+```bash
+curl -s -X POST http://localhost:5678/webhook/calendar-event-ingest \
+  -H "Content-Type: application/json" \
+  -d '{
+    "eventId": "velentium-clearwater-20260121-1300",
+    "subject": "Velentium | Clearwater",
+    "start": "2026-01-21T13:00:00-05:00",
+    "end": "2026-01-21T13:30:00-05:00",
+    "organizer": "Austin Holland <Austin.Holland@clearwatersecurity.com>",
+    "attendees": "Austin.Holland@clearwatersecurity.com;Richmond.Donnelly@clearwatersecurity.com;david.kolb@clearwatersecurity.com;uday.rao@velentiummedical.com;travis.bird@velentiummedical.com;afelsenthal@gppfunds.com",
+    "location": "Microsoft Teams Meeting",
+    "bodyContent": "Microsoft Teams Meeting. Join the meeting now. Meeting ID: 215 347 332 882 67. Passcode: FP3nZ6sj."
+  }'
 ```
-Subject: Fwd: Discovery Call — Velentium + Clearwater Security
 
----------- Forwarded message ---------
-From: Austin Holland <Austin.Holland@clearwatersecurity.com>
-Date: Thu, Feb 27, 2026 at 9:00 AM
-Subject: Discovery Call — Velentium + Clearwater Security
-To: Brad Brown <brad.brown@velentium.com>
-Cc: Jennifer Lee <jennifer.lee@velentium.com>
-
-Brad, Jennifer —
-
-Looking forward to connecting Thursday. Calendar invite is below.
-Agenda for our 45-minute call:
-
-1. Overview of Velentium's current cybersecurity and compliance posture
-2. Walk through any recent audit or risk assessment findings
-3. Discuss Clearwater's engagement approach
-4. Align on next steps
-
-Best,
-Austin Holland
-Account Executive, Clearwater Security & Compliance
-Austin.Holland@clearwatersecurity.com
-
---- Calendar Invite Details ---
-Event: Discovery Call — Velentium + Clearwater Security
-Date: Thursday, March 5, 2026
-Time: 10:00 AM – 10:45 AM CT
-Location: Zoom
-Organizer: Austin Holland <Austin.Holland@clearwatersecurity.com>
-Guests:
-  - Brad Brown, CTO, Velentium <brad.brown@velentium.com> ✓ Accepted
-  - Jennifer Lee, VP Operations, Velentium <jennifer.lee@velentium.com> ✓ Accepted
-  - Austin Holland <Austin.Holland@clearwatersecurity.com>
-
-Description:
-Initial discovery call to explore how Clearwater can support Velentium's
-cybersecurity and compliance program.
-```
+> **Source**: Real Outlook calendar invite (Velentium | Clearwater, Jan 21 2026, 1–1:30pm ET).
+> Attendees: Austin Holland, Richmond Donnelly, David Kolb (Clearwater); Uday Rao, Travis Bird (Velentium); Adam Felsenthal (GPP Funds).
+> Domain attribution will resolve to `velentiummedical.com` → `deal_id = cw_velentiummedical_2026`.
 
 **Steps**:
-1. Send to `raustinholland+echo@gmail.com`
-2. Wait up to 2 minutes (trigger polls every 1 min)
-3. Open n8n > Executions — click the new execution
+1. Run the curl command above
+2. Open n8n > Executions — look for a CW-05 execution, then a CW-02 execution
 
 **Expected Results**:
 - All nodes green
@@ -427,15 +444,60 @@ docker exec clearwater-postgres psql -U clearwater -d clearwater_deals -c \
 
 | Test # | Test Name | Date | Status | Notes |
 |--------|-----------|------|--------|-------|
-| 1 | Calendar Invite — Velentium (New Deal) | 2026-02-28 | ✅ | Qdrant payload fix validated, deal created |
-| 1a | CW-02 Shell Opportunity — Calendar-Only Zero-Score | | ⬜ | Not yet run (Stallant test) |
-| 2 | Deduplication — Same Invite Again | 2026-02-28 | ✅ | No duplicate records |
-| 3 | Discovery Call Transcript — Existing Deal | 2026-02-28 | ✅ | Multi-chunk, no new deal row |
-| 4 | Low-Confidence Attribution Queue | | ⬜ | Not yet run |
-| 5 | Phase 2 Health Scoring | 2026-02-28 | ✅ | Velentium 17/30, golden record calibrated |
-| 6 | Phase 3 Output Generation | 2026-02-28 | ✅ | Gmail sent, outputs_log inserted |
-| 7 | Phase 4 Chat Agent smoke test | 2026-02-28 | ✅ | 28 deals returned, attribution queue surfaced |
-| 8 | Phase 5 AD Tracker — end-to-end | 2026-03-01 | ✅ | See Phase 5 test results below |
+| 1 | Calendar Invite — Velentium (New Deal) | 2026-03-02 | ⬜ | Needs clean retest next session |
+| 1a | CW-02 Shell Opportunity — Calendar-Only Zero-Score | 2026-03-02 | ⬜ | Needs clean retest next session |
+| 2 | Deduplication — Same Invite Again | 2026-03-02 | ⬜ | Bug found + fixed (CW-05 xmax gate). Needs clean retest next session |
+| 3 | Discovery Call Transcript — Existing Deal | | ⬜ | |
+| 4 | Low-Confidence Attribution Queue | | ⬜ | Low priority |
+| 5 | Phase 2 Health Scoring | | ⬜ | |
+| 6 | Phase 3 Output Generation | | ⬜ | |
+| 7 | Phase 4 Chat Agent smoke test | | ⬜ | |
+| 8 | Phase 5 AD Tracker — end-to-end | | ⬜ | |
+
+---
+
+## Fix Log (2026-03-02)
+
+### CW-05: Calendar Event Dedup — CW-02 Re-triggered on Duplicate
+**Bug**: `Postgres: Insert Calendar Event` used `ON CONFLICT DO UPDATE`, which always returned a row and always triggered CW-02, even for duplicate events.
+**Fix**: Added `RETURNING (xmax = 0) AS is_new_insert` to the SQL. Added new node `IF: New Event?` between `Postgres: Insert Calendar Event` and `HTTP: Trigger Health Agent`. Gates CW-02 trigger on `is_new_insert = true` only. Duplicate/rescheduled events still update the row (time, attendees) but do not re-trigger scoring.
+**Verified**: `(xmax = 0)` evaluates `true` inside the transaction on fresh insert, `false` on update. Confirmed in Postgres directly before deploying.
+**Deployed**: `workflow-05-calendar-sync.json`, 7 nodes, 2026-03-02.
+
+---
+
+## Next Session — Start Here
+
+**Pre-test: Clean system completely, then run Tests 1 → 2 in order.**
+
+```bash
+# 1. Wipe all deal data
+cd deal-intelligence-engine
+docker exec clearwater-postgres psql -U clearwater -d clearwater_deals -c "
+TRUNCATE TABLE deal_workstreams CASCADE;
+TRUNCATE TABLE approach_doc CASCADE;
+TRUNCATE TABLE deal_stakeholders CASCADE;
+TRUNCATE TABLE deal_health CASCADE;
+TRUNCATE TABLE calendar_events CASCADE;
+TRUNCATE TABLE ingestion_log CASCADE;
+TRUNCATE TABLE outputs_log CASCADE;
+TRUNCATE TABLE attribution_queue CASCADE;
+TRUNCATE TABLE n8n_chat_histories CASCADE;
+TRUNCATE TABLE deals CASCADE;"
+
+# 2. Wipe Qdrant
+curl -s -X DELETE http://localhost:6333/collections/deals
+curl -s -X PUT http://localhost:6333/collections/deals \
+  -H "Content-Type: application/json" \
+  -d '{"vectors":{"size":1536,"distance":"Cosine"},"quantization_config":{"scalar":{"type":"int8","always_ram":true}}}'
+
+# 3. Verify zeros
+docker exec clearwater-postgres psql -U clearwater -d clearwater_deals -c "SELECT 'deals' as tbl, count(*) FROM deals UNION ALL SELECT 'deal_health', count(*) FROM deal_health UNION ALL SELECT 'calendar_events', count(*) FROM calendar_events;"
+curl -s http://localhost:6333/collections/deals | jq '{points: .result.points_count}'
+```
+
+**Then run Tests 1, 1a, 2 using the synthetic curl command above.**
+Expected after all 3 pass: deals=1, calendar_events=1, deal_health=1.
 
 ---
 

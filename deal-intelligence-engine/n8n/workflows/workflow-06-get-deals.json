@@ -1,0 +1,82 @@
+{
+  "id": "h2CrtDQx4fUp4c7v",
+  "name": "CW-06: Get Deals",
+  "active": true,
+  "nodes": [
+    {
+      "id": "cw06-0001-0000-0000-000000000001",
+      "name": "Webhook: Get Deals",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "cw06-0001-0000-0000-000000000001",
+      "position": [240, 300],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "get-deals",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "cw06-0002-0000-0000-000000000002",
+      "name": "Postgres: Get Active Deals",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT deal_id, company_name, deal_stage, is_active FROM deals WHERE is_active = true ORDER BY company_name ASC",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "WwO5ZGy91Fw5lSFo",
+          "name": "Clearwater Postgres"
+        }
+      }
+    },
+    {
+      "id": "cw06-0003-0000-0000-000000000003",
+      "name": "Code: Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300],
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(item => item.json);\nreturn [{ json: { deals: rows } }];"
+      }
+    },
+    {
+      "id": "cw06-0004-0000-0000-000000000004",
+      "name": "Respond: Return Deals",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [900, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              { "name": "Access-Control-Allow-Origin", "value": "*" },
+              { "name": "Content-Type", "value": "application/json" }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook: Get Deals": {
+      "main": [[{ "node": "Postgres: Get Active Deals", "type": "main", "index": 0 }]]
+    },
+    "Postgres: Get Active Deals": {
+      "main": [[{ "node": "Code: Format Response", "type": "main", "index": 0 }]]
+    },
+    "Code: Format Response": {
+      "main": [[{ "node": "Respond: Return Deals", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
