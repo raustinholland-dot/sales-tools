@@ -103,9 +103,15 @@ def classify_file(filepath: Path, text: str) -> dict:
 
     # Transcript files with date prefix
     if "transcript" in fn and suffix == ".txt":
-        # Check for voice memo header
+        # Voice memo transcripts have [VOICE MEMO TRANSCRIPT] header
         if "[VOICE MEMO TRANSCRIPT]" in text[:500]:
-            return {"type": "voice_memo", "score_worthy": False, "priority": "low"}
+            # But only classify as voice_memo if it's an internal excerpt
+            # External calls identified by Claude Sonnet should be call_transcript
+            header = text[:500].lower()
+            if "call type: internal excerpt" in header:
+                return {"type": "voice_memo", "score_worthy": False, "priority": "low"}
+            # No internal excerpt tag = real external call transcript
+            return {"type": "call_transcript", "score_worthy": True, "priority": "high"}
         # Regular call transcript
         return {"type": "call_transcript", "score_worthy": True, "priority": "high"}
 
@@ -619,7 +625,7 @@ def build_milestones(items: list, calendar_events: list) -> list:
                     label=f"{date_range} — Email Exchanges",
                     date=earliest,
                     trigger_type="client_response" if has_client else "bundle",
-                    should_score=has_client,
+                    should_score=False,  # Emails alone don't trigger scoring; only calls + docs do
                 )
                 for ls in pending_low_signal:
                     m.add(ls)
@@ -957,6 +963,22 @@ def ingest_milestone(deal_config: dict, milestone: Milestone,
 
     # Score
     if milestone.should_score and not skip_scoring:
+        # Count scores before firing so we can detect new ones
+        import psycopg2
+        pre_count = 0
+        try:
+            conn = psycopg2.connect(
+                host=POSTGRES_HOST, port=int(POSTGRES_PORT),
+                dbname=POSTGRES_DB, user=POSTGRES_USER, password=POSTGRES_PASSWORD
+            )
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM deal_health WHERE deal_id = %s", (deal_config["deal_id"],))
+            pre_count = cur.fetchone()[0]
+            cur.close()
+            conn.close()
+        except Exception:
+            pass
+
         print(f"  Firing CW-02 health scoring...")
         fire_cw02(deal_config["deal_id"], milestone.label)
 
@@ -975,7 +997,6 @@ def ingest_milestone(deal_config: dict, milestone: Milestone,
             # Backdate the scored_at to the milestone date
             milestone_date = milestone.date
             try:
-                import psycopg2
                 conn = psycopg2.connect(
                     host=POSTGRES_HOST, port=int(POSTGRES_PORT),
                     dbname=POSTGRES_DB, user=POSTGRES_USER, password=POSTGRES_PASSWORD
@@ -994,6 +1015,9 @@ def ingest_milestone(deal_config: dict, milestone: Milestone,
             except Exception as e:
                 print(f"  [!] Failed to backdate score: {e}")
 
+            # Dedup: remove any duplicate scores created by this trigger
+            dedup_scores(deal_config["deal_id"], pre_count + 1)
+
             return {
                 "milestone": milestone.label,
                 "total": total, "cas": cas,
@@ -1008,6 +1032,140 @@ def ingest_milestone(deal_config: dict, milestone: Milestone,
         print(f"  No scoring trigger for this milestone")
 
     return None
+
+
+# ── Score dedup + verification ────────────────────────────────────────────────
+
+def dedup_scores(deal_id: str, expected_count: int):
+    """Remove duplicate deal_health rows that shouldn't exist.
+
+    After a scoring milestone, we expect exactly `expected_count` rows.
+    If there are more, keep only the most recent per unique scored_at date
+    (after backdating), and remove the rest.
+    """
+    import psycopg2
+    try:
+        conn = psycopg2.connect(
+            host=POSTGRES_HOST, port=int(POSTGRES_PORT),
+            dbname=POSTGRES_DB, user=POSTGRES_USER, password=POSTGRES_PASSWORD
+        )
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM deal_health WHERE deal_id = %s", (deal_id,))
+        actual = cur.fetchone()[0]
+        if actual <= expected_count:
+            cur.close()
+            conn.close()
+            return  # No duplicates
+
+        # Find and remove duplicates: keep the row with the highest id per scored_at date
+        cur.execute("""
+            DELETE FROM deal_health
+            WHERE id NOT IN (
+                SELECT MAX(id)
+                FROM deal_health
+                WHERE deal_id = %s
+                GROUP BY scored_at::date
+            ) AND deal_id = %s
+        """, (deal_id, deal_id))
+        removed = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+        if removed > 0:
+            print(f"  [dedup] Removed {removed} duplicate score row(s)")
+    except Exception as e:
+        print(f"  [warn] Score dedup failed: {e}")
+
+
+def verify_backfill(deal_config: dict, expected_scores: int):
+    """Post-backfill verification: compare expected vs actual scores, check for dupes."""
+    import psycopg2
+    deal_id = deal_config["deal_id"]
+    print(f"\n{'─'*60}")
+    print(f"VERIFICATION — {deal_config['company_name']}")
+    print(f"{'─'*60}")
+
+    try:
+        conn = psycopg2.connect(
+            host=POSTGRES_HOST, port=int(POSTGRES_PORT),
+            dbname=POSTGRES_DB, user=POSTGRES_USER, password=POSTGRES_PASSWORD
+        )
+        cur = conn.cursor()
+
+        # Score count
+        cur.execute("SELECT COUNT(*) FROM deal_health WHERE deal_id = %s", (deal_id,))
+        score_count = cur.fetchone()[0]
+        match = "OK" if score_count == expected_scores else f"MISMATCH (expected {expected_scores})"
+        print(f"  Score rows: {score_count}  [{match}]")
+
+        # Check for same-date duplicates
+        cur.execute("""
+            SELECT scored_at::date, COUNT(*) FROM deal_health
+            WHERE deal_id = %s GROUP BY scored_at::date HAVING COUNT(*) > 1
+        """, (deal_id,))
+        dupes = cur.fetchall()
+        if dupes:
+            print(f"  [!] Duplicate scores on same date:")
+            for d, cnt in dupes:
+                print(f"      {d}: {cnt} rows")
+            # Auto-clean
+            cur.execute("""
+                DELETE FROM deal_health
+                WHERE id NOT IN (
+                    SELECT MAX(id) FROM deal_health
+                    WHERE deal_id = %s GROUP BY scored_at::date
+                ) AND deal_id = %s
+            """, (deal_id, deal_id))
+            cleaned = cur.rowcount
+            conn.commit()
+            print(f"  [dedup] Cleaned {cleaned} duplicate(s)")
+        else:
+            print(f"  No duplicate scores  [OK]")
+
+        # Score progression
+        cur.execute("""
+            SELECT scored_at::date, pain_score, power_score, vision_score,
+                   value_score, change_score, control_score,
+                   (pain_score+power_score+vision_score+value_score+change_score+control_score) as total,
+                   critical_activity_stage, trigger_type
+            FROM deal_health WHERE deal_id = %s ORDER BY scored_at
+        """, (deal_id,))
+        rows = cur.fetchall()
+        if rows:
+            print(f"\n  Score Progression:")
+            print(f"  {'Date':<12} {'Total':>5}  {'P':>2} {'Po':>2} {'Vi':>2} {'Va':>2} {'Ch':>2} {'Co':>2}  {'CAS'}")
+            print(f"  {'─'*12} {'─'*5}  {'─'*2} {'─'*2} {'─'*2} {'─'*2} {'─'*2} {'─'*2}  {'─'*30}")
+            for r in rows:
+                dt, p, po, vi, va, ch, co, total, cas, trigger = r
+                print(f"  {str(dt):<12} {total:>5}  {p:>2} {po:>2} {vi:>2} {va:>2} {ch:>2} {co:>2}  {cas or ''}")
+
+        # Ingestion log count
+        cur.execute("SELECT COUNT(*) FROM ingestion_log WHERE deal_id = %s", (deal_id,))
+        ingest_count = cur.fetchone()[0]
+        print(f"\n  Ingestion log entries: {ingest_count}")
+
+        # Outputs log (prior outputs)
+        cur.execute("""
+            SELECT COUNT(*), COUNT(DISTINCT output_type) FROM outputs_log
+            WHERE deal_id = %s AND status = 'sent'
+        """, (deal_id,))
+        out_row = cur.fetchone()
+        print(f"  Prior outputs: {out_row[0]} ({out_row[1]} types)")
+
+        # Draft check
+        cur.execute("SELECT COUNT(*) FROM outputs_log WHERE deal_id = %s AND status = 'draft'", (deal_id,))
+        draft_count = cur.fetchone()[0]
+        if draft_count > 0:
+            print(f"  [!] {draft_count} stale drafts remain")
+        else:
+            print(f"  No stale drafts  [OK]")
+
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"  [!] Verification failed: {e}")
+
+    print(f"{'─'*60}\n")
 
 
 # ── Clean existing data for a deal ───────────────────────────────────────────
@@ -1323,6 +1481,10 @@ def process_deal(deal_name: str, dry_run: bool = False,
         print(f"\nExtracting {len(outbound)} outbound emails as Prior Outputs...")
         inserted = insert_outbound_emails(outbound, deal_config)
         print(f"  -> {inserted} outbound emails written to outputs_log")
+
+    # ── Step 7: Verification ─────────────────────────────────────────────
+    expected_scores = len(score_history)
+    verify_backfill(deal_config, expected_scores)
 
     # Mark deal complete
     if deal_name not in progress.get("completed_deals", []):

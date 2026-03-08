@@ -1018,6 +1018,8 @@ body {
 }
 .prior-item:hover { border-color:var(--accent-border); box-shadow:var(--shadow-sm); }
 .prior-item.prior-expanded { border-color:var(--accent); background:var(--bg-elevated); }
+.sh-row:hover { background:var(--bg-elevated) !important; }
+.sh-row.sh-active { background:var(--bg-surface) !important; font-weight:700 !important; }
 .prior-item:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .prior-chunks-btn { margin-top:8px; padding:4px 10px; font-size:11px; font-weight:600; border:1px solid var(--accent-border); border-radius:var(--r-sm); background:var(--accent-bg); color:var(--accent-text); cursor:pointer; }
 .prior-chunks-btn:hover { background:var(--accent); color:#fff; }
@@ -3278,8 +3280,14 @@ let _activityDocsData = null;
 addEventListener('DOMContentLoaded', async () => {
   await loadDeals();
   const validViews = ['global','detail','internal','log'];
-  const hashView = window.location.hash.replace('#','');
+  const rawHash = window.location.hash.replace('#','');
+  const hashParts = rawHash.split('/');
+  const hashView = hashParts[0];
+  const hashDeal = hashParts[1] || null;
   switchView(validViews.includes(hashView) ? hashView : 'global');
+  if (hashView === 'detail' && hashDeal) {
+    selectDeal(hashDeal);
+  }
   setupResizer();
   document.getElementById('chatInput').addEventListener('input', autoResize);
   restoreCollapseState();
@@ -3333,6 +3341,7 @@ async function selectDeal(id) {
   }
 
   dealId = id;
+  window.location.hash = 'detail/' + id;
   sessionId = `deal_${id}_${Date.now()}`;
   document.getElementById('leftPanel').innerHTML = `<div class="panel-empty">Loading…</div>`;
   setScopeBar('Loading…', 'Switch to Pipeline');
@@ -3450,7 +3459,6 @@ function renderLeft(ctx) {
 
   /* Score History */
   scroll.appendChild(buildSection('scoreHist', 'Score History', null, buildScoreHistoryPlaceholder()));
-  fetchScoreHistory(dealId);
 
   /* Dimension scores */
   scroll.appendChild(buildSection('dims', 'Dimension Scores', null, buildDimGrid(s, ctx.prev_scores)));
@@ -3489,6 +3497,7 @@ function renderLeft(ctx) {
 
   panel.appendChild(scroll);
   restoreCollapseState();
+  fetchScoreHistory(dealId);
 }
 
 /* ── SCORE HERO ─────────────────────────────── */
@@ -3859,8 +3868,8 @@ async function fetchScoreHistory(did) {
                '<span style="font-size:9px;margin-left:1px;color:var(--text-secondary)">' + v + '</span>';
       }
 
-      html += '<tr style="border-bottom:1px solid var(--border);background:' + bgColor + ';font-weight:' + fontWeight + ';cursor:pointer" ' +
-        'onclick="this.nextElementSibling && this.nextElementSibling.classList.contains(\'sh-detail\') ? this.nextElementSibling.remove() : insertScoreHistoryDetail(this,\'' + row.scored_at + '\',' + JSON.stringify([pain,power,vision,value,change,control]).replace(/"/g,'&quot;') + ')">' +
+      html += '<tr class="sh-row' + (idx === 0 ? ' sh-active' : '') + '" style="border-bottom:1px solid var(--border);background:' + bgColor + ';font-weight:' + fontWeight + ';cursor:pointer" ' +
+        'onclick="selectScoreHistoryRow(this,' + pain + ',' + power + ',' + vision + ',' + value + ',' + change + ',' + control + ')">' +
         '<td style="padding:3px 4px;white-space:nowrap">' + dateStr + triggerBadge + '</td>' +
         '<td style="padding:3px 4px;text-align:center;color:' + totalColor + '">' + total + '/30' + deltaStr + '</td>' +
         '<td style="padding:3px 4px;text-align:center;color:var(--text-secondary)">' + cas + '</td>' +
@@ -3879,27 +3888,59 @@ async function fetchScoreHistory(did) {
   }
 }
 
-function insertScoreHistoryDetail(rowEl, scoredAt, scores) {
-  var dims = ['Pain','Power','Vision','Value','Change','Control'];
-  var tr = document.createElement('tr');
-  tr.className = 'sh-detail';
-  var td = document.createElement('td');
-  td.colSpan = 9;
-  td.style.cssText = 'padding:6px 8px;background:var(--bg-surface);border-bottom:1px solid var(--border)';
-  var inner = '<div style="display:flex;gap:8px;flex-wrap:wrap">';
-  scores.forEach(function(v, i) {
-    var pct = Math.round((v / 5) * 100);
-    var color = v >= 4 ? 'var(--green)' : v >= 2 ? 'var(--amber)' : 'var(--red)';
-    inner += '<div style="text-align:center;min-width:40px">' +
-      '<div style="font-size:9px;color:var(--text-faint);margin-bottom:2px">' + dims[i] + '</div>' +
-      '<div style="width:36px;height:36px;border-radius:50%;border:2.5px solid ' + color + ';display:flex;align-items:center;justify-content:center;margin:0 auto">' +
-        '<span style="font-size:13px;font-weight:700;color:' + color + '">' + v + '</span>' +
-      '</div></div>';
+function selectScoreHistoryRow(rowEl, pain, power, vision, value, change, control) {
+  // Highlight active row
+  document.querySelectorAll('.sh-row').forEach(function(r) {
+    r.classList.remove('sh-active');
+    r.style.background = 'transparent';
+    r.style.fontWeight = '400';
   });
-  inner += '</div>';
-  td.innerHTML = inner;
-  tr.appendChild(td);
-  rowEl.parentNode.insertBefore(tr, rowEl.nextSibling);
+  rowEl.classList.add('sh-active');
+  rowEl.style.background = 'var(--bg-surface)';
+  rowEl.style.fontWeight = '700';
+
+  // Update the radar chart above
+  updateRadar({ pain: pain, power: power, vision: vision, value: value, change: change, control: control });
+}
+
+function updateRadar(scores) {
+  var container = document.querySelector('.radar-container');
+  if (!container) return;
+  var W = 220, H = 190, cx = 110, cy = 97, maxR = 70;
+  var DIMS = ['pain','power','vision','value','change','control'];
+  var LABELS = ['Pain','Power','Vision','Value','Change','Control'];
+  var angles = DIMS.map(function(_, i) { return Math.PI * 2 * i / 6 - Math.PI / 2; });
+
+  var coords = DIMS.map(function(d, i) {
+    var v = scores[d] || 0;
+    var r = (v / 5) * maxR;
+    return { x: cx + r * Math.cos(angles[i]), y: cy + r * Math.sin(angles[i]), v: v };
+  });
+  var ptStr = coords.map(function(c) { return c.x.toFixed(1) + ',' + c.y.toFixed(1); }).join(' ');
+
+  // Update data polygon
+  var svg = container.querySelector('svg');
+  var polys = svg.querySelectorAll('polygon');
+  var dataPoly = polys[polys.length - 1]; // last polygon is the data one
+  dataPoly.setAttribute('points', ptStr);
+
+  // Update dots
+  var circles = svg.querySelectorAll('circle');
+  coords.forEach(function(c, i) {
+    circles[i].setAttribute('cx', c.x.toFixed(1));
+    circles[i].setAttribute('cy', c.y.toFixed(1));
+    var dotCol = c.v >= 4 ? '#15803d' : c.v >= 3 ? '#b45309' : '#b91c1c';
+    circles[i].setAttribute('fill', dotCol);
+  });
+
+  // Update labels
+  var labels = container.querySelectorAll('.rlbl');
+  labels.forEach(function(lbl, i) {
+    var v = scores[DIMS[i]] || 0;
+    var cls = v >= 4 ? 'c-green' : v >= 3 ? 'c-amber' : 'c-red';
+    lbl.className = 'rlbl ' + cls;
+    lbl.querySelector('.rv').textContent = v + '/5';
+  });
 }
 
 /* ── TREND ──────────────────────────────────── */
@@ -4086,32 +4127,37 @@ async function priorViewChunks(subject, outputType, btn) {
   if (container.innerHTML) { container.innerHTML = ''; btn.textContent = 'View Chunks'; return; }
   btn.textContent = '...';
   try {
-    // Map output_type to Qdrant doc_type
+    // Map output_type to Qdrant doc_type(s) to search
     const docTypeMap = {
-      'overview_deck': 'pdf_attachment',
-      'approach_document': 'pdf_attachment',
-      'executive_presentation': 'pptx_attachment',
-      'pdf_attachment': 'pdf_attachment',
-      'pptx_attachment': 'pptx_attachment'
+      'overview_deck': ['pdf_attachment', 'pptx_attachment'],
+      'approach_document': ['pdf_attachment', 'pptx_attachment'],
+      'executive_presentation': ['pptx_attachment', 'pdf_attachment'],
+      'pdf_attachment': ['pdf_attachment'],
+      'pptx_attachment': ['pptx_attachment']
     };
-    const qdrantDocType = docTypeMap[outputType] || 'pdf_attachment';
+    const qdrantDocTypes = docTypeMap[outputType] || ['pdf_attachment', 'pptx_attachment'];
 
     // Query Qdrant directly for chunks matching this deal + doc type
-    const res = await fetch('http://localhost:6333/collections/deals/points/scroll', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        filter: { must: [
-          { key: 'deal_id', match: { value: dealId } },
-          { key: 'doc_type', match: { value: qdrantDocType } }
-        ]},
-        limit: 20,
-        with_payload: true
-      })
-    });
-    const data = await res.json();
-    const chunks = (data.result && data.result.points ? data.result.points : [])
-      .sort(function(a, b) { return (a.payload && a.payload.chunk_index || 0) - (b.payload && b.payload.chunk_index || 0); });
+    // Try each doc type until we find chunks
+    let chunks = [];
+    for (const dt of qdrantDocTypes) {
+      const res = await fetch('http://localhost:6333/collections/deals/points/scroll', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filter: { must: [
+            { key: 'deal_id', match: { value: dealId } },
+            { key: 'doc_type', match: { value: dt } }
+          ]},
+          limit: 20,
+          with_payload: true
+        })
+      });
+      const data = await res.json();
+      chunks = (data.result && data.result.points ? data.result.points : [])
+        .sort(function(a, b) { return (a.payload && a.payload.chunk_index || 0) - (b.payload && b.payload.chunk_index || 0); });
+      if (chunks.length) break;
+    }
 
     var html = '';
     if (!chunks.length) {
@@ -5466,7 +5512,11 @@ if (localStorage.getItem('darkMode') === 'on') {
 /* ── VIEW TOGGLE (Deal Detail / Triage Queue) ── */
 function switchView(view, opts) {
   currentView = view;
-  window.location.hash = view;
+  if (view === 'detail' && dealId) {
+    window.location.hash = 'detail/' + dealId;
+  } else {
+    window.location.hash = view;
+  }
   const dealEls = ['leftPanel','leftResizer','centerPanel','resizer','rightPanel'].map(id => document.getElementById(id));
   const views = {
     global: document.getElementById('globalView'),
