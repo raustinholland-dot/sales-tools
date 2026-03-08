@@ -4054,12 +4054,43 @@ function shCard(s) {
   const nameEsc = esc(s.name||'');
   const roleEsc = esc(ru);
 
+  // Build email interaction summary from prior_outputs
+  let emailInteractions = [];
+  if (s.email && dealCtx && dealCtx.prior_outputs) {
+    const em = s.email.toLowerCase();
+    dealCtx.prior_outputs.forEach(function(o) {
+      if (o.recipient_email && o.recipient_email.toLowerCase() === em) {
+        const date = (o.created_at || '').slice(0, 10);
+        const type = (o.output_type || '').replace(/_/g, ' ');
+        emailInteractions.push((date ? date + ' — ' : '') + type);
+      }
+    });
+  }
+
+  // Build tooltip text
+  let tipLines = [];
+  if (s.title) tipLines.push(s.title);
+  if (s.email) tipLines.push(s.email);
+  if (s.directly_engaged) tipLines.push('Directly engaged');
+  if (emailInteractions.length) {
+    tipLines.push('');
+    tipLines.push('Email history (' + emailInteractions.length + '):');
+    emailInteractions.slice(0, 5).forEach(function(e) { tipLines.push('  ' + e); });
+    if (emailInteractions.length > 5) tipLines.push('  + ' + (emailInteractions.length - 5) + ' more');
+  } else if (s.email) {
+    tipLines.push('');
+    tipLines.push('No email interactions yet');
+  }
+  const tooltip = tipLines.join('\n');
+
   const wrap = document.createElement('div');
   wrap.className = 'menu-wrap';
   wrap.style.position = 'relative';
 
   const el  = document.createElement('div');
   el.className = `sh-card r-${rk}`;
+  if (tooltip) el.title = tooltip;
+  el.style.cursor = 'default';
   el.innerHTML = `
     <div class="sh-avatar av-${rk}" aria-hidden="true">${ini}</div>
     <div class="sh-body">
