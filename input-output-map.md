@@ -1,5 +1,5 @@
 # Input → Output Map
-*Ground truth dataset for building Johnny's skill prompts.*
+*Ground truth dataset for building skill prompts.*
 *Populated session by session. Each row = one real input Austin labeled.*
 
 ---

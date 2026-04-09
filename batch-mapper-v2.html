@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Input-Output Batch Mapper</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: monospace; background: #1a1a1a; color: #e0e0e0; padding: 20px; }
+        .container { max-width: 100%; margin: 0 auto; }
+        header { margin-bottom: 20px; }
+        h1 { font-size: 1.5em; margin-bottom: 10px; }
+
+        .controls { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+        button { padding: 8px 12px; background: #2a5298; color: white; border: none; cursor: pointer; border-radius: 4px; }
+        button:hover { background: #1e3c72; }
+        input[type="text"] { padding: 8px; background: #2a2a2a; color: #e0e0e0; border: 1px solid #444; border-radius: 4px; }
+
+        .main { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; height: calc(100vh - 180px); }
+        .column { border: 1px solid #444; border-radius: 4px; padding: 15px; background: #222; display: flex; flex-direction: column; overflow: hidden; }
+        .column h2 { font-size: 1.1em; margin-bottom: 12px; border-bottom: 1px solid #444; padding-bottom: 8px; flex-shrink: 0; }
+
+        .input-selector { flex: 0 0 auto; margin-bottom: 15px; max-height: 100px; overflow-y: auto; }
+        .input-option { padding: 8px; margin-bottom: 6px; background: #2a2a2a; border: 1px solid #555; border-radius: 4px; cursor: pointer; font-size: 0.85em; }
+        .input-option:hover { background: #333; border-color: #666; }
+        .input-option.selected { background: #2a5298; border-color: #5a9fd4; }
+
+        .input-details { flex: 1; overflow-y: auto; font-size: 0.9em; line-height: 1.6; padding: 5px; }
+        .input-details div { margin-bottom: 8px; word-wrap: break-word; }
+        .input-details strong { color: #5a9fd4; }
+        .input-details hr { border: none; border-top: 1px solid #444; margin: 10px 0; }
+
+        .outputs-list { flex: 1; overflow-y: auto; }
+        .output-item { padding: 12px; margin-bottom: 8px; background: #2a2a2a; border: 1px solid #555; border-radius: 4px; cursor: pointer; flex-shrink: 0; transition: all 0.2s; }
+        .output-item:hover { background: #333; border-color: #888; }
+        .output-item.selected { background: #2a5298; border-color: #5a9fd4; box-shadow: 0 0 8px #2a5298; }
+        .output-file { font-weight: bold; color: #5a9fd4; margin-bottom: 4px; font-size: 0.95em; }
+        .output-desc { font-size: 0.85em; color: #aaa; }
+
+        .output-details { flex: 1; overflow-y: auto; }
+        .detail-section { padding: 12px; background: #2a2a2a; border: 1px solid #444; border-radius: 4px; line-height: 1.6; }
+        .detail-section strong { color: #5a9fd4; }
+        .detail-section div { margin: 6px 0; font-size: 0.95em; word-wrap: break-word; }
+        .chained-outputs { margin-top: 10px; padding-top: 10px; border-top: 1px solid #444; }
+        .chained-outputs div { font-size: 0.85em; color: #999; margin: 4px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 Input-Output Mapper</h1>
+            <p style="color: #888; font-size: 0.9em;">Map inputs → output destinations → chained outputs</p>
+        </header>
+
+        <div class="controls">
+            <button onclick="resetToEarliest()" style="background: #5a9fd4;">🔄 Refresh</button>
+            <input type="text" id="batchName" placeholder="Batch name">
+            <button onclick="createNewBatch()">Create Batch</button>
+            <button onclick="clearSelection()">Clear</button>
+        </div>
+
+        <div class="main">
+            <!-- LEFT: INPUT SELECTOR + DETAILS -->
+            <div class="column">
+                <h2>📥 Input</h2>
+                <div class="input-selector" id="inputSelector"></div>
+                <div id="inputDetailsDiv" class="input-details">
+                    <p style="color: #888;">Select an input to view details</p>
+                </div>
+            </div>
+
+            <!-- MIDDLE: OUTPUT DESTINATIONS -->
+            <div class="column">
+                <h2>📤 Output Destinations</h2>
+                <div class="outputs-list" id="outputsList">
+                    <p style="color: #888; padding: 10px;">Select an input to see where info gets written</p>
+                </div>
+            </div>
+
+            <!-- RIGHT: WHAT GETS WRITTEN -->
+            <div class="column">
+                <h2>✍️ What Gets Written</h2>
+                <div id="outputDetailsDiv" class="output-details">
+                    <p style="color: #888; padding: 10px;">Click an output destination to see details</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let inputs = [
+            {
+                id: "INPUT-001",
+                time: "2026-03-27 07:15 AM CT",
+                from: "David Kolb",
+                type: "email",
+                subject: "Morning check-in",
+                preview: "Quick sync on Q1 pipeline status"
+            },
+            {
+                id: "INPUT-002",
+                time: "2026-04-01 08:32 AM CT",
+                from: "Richmond Donnelly",
+                type: "email",
+                subject: "FW: Behavioral Health Workforce Outlook / CapGrow",
+                preview: "Richmond flagging CapGrow conference (ANCOR Connect, April 21-23)"
+            },
+            {
+                id: "INPUT-003",
+                time: "2026-04-01 11:54 AM CT",
+                from: "Richmond Donnelly",
+                type: "email",
+                subject: "Ephicacy Updates",
+                preview: "Teams meeting link for Ephicacy deal"
+            },
+            {
+                id: "INPUT-004",
+                time: "2026-04-01 01:07 PM CT",
+                from: "Sarah (sarahs@holisticwellness.clinic)",
+                type: "email",
+                subject: "Re: Following Up - Clearwater | Holistic Wellness",
+                preview: "Sarah confirmed Friday 4/3 at 11am CST for call"
+            },
+            {
+                id: "INPUT-005",
+                time: "2026-04-01 03:14 PM CT",
+                from: "Richmond Donnelly",
+                type: "email",
+                subject: "RE: Pyramids | Clearwater",
+                preview: "Richmond asking to confirm April or May for Pyramids meeting"
+            }
+        ];
+
+        let outputMappings = {
+            "INPUT-001": [
+                {
+                    file: "memory/2026-03-27.md",
+                    desc: "Log pipeline briefing",
+                    writes: "Date, time, sender, Q1 pipeline overview from David"
+                }
+            ],
+            "INPUT-002": [
+                {
+                    file: "ops/events/conferences/ancor-connect-2026.md",
+                    desc: "Conference event file",
+                    writes: "Event name, dates (April 21-23), location, booth details, contact (Dene from CapGrow)"
+                },
+                {
+                    file: "ops/events/index.md",
+                    desc: "Update events index",
+                    writes: "Add ANCOR Connect to Horizon table (30-90 days out)"
+                },
+                {
+                    file: "reference/deal-contacts.md",
+                    desc: "Create contact entry",
+                    writes: "Dene from CapGrow: email, phone, title, relationship context"
+                },
+                {
+                    file: "ops/tasks/index.md",
+                    desc: "Create outreach task",
+                    writes: "Task: reach out to Dene before April 21; priority/owner/due date"
+                },
+                {
+                    file: "memory/2026-04-01.md",
+                    desc: "Memory log",
+                    writes: "Richmond's email forwarding CapGrow opportunity + ANCOR Connect conference flagged"
+                }
+            ],
+            "INPUT-003": [
+                {
+                    file: "deals/ephicacy/deal-state.md",
+                    desc: "Update deal state",
+                    writes: "Ephicacy meeting link, date, time, attendees, agenda context"
+                },
+                {
+                    file: "memory/2026-04-01.md",
+                    desc: "Memory log",
+                    writes: "Ephicacy meeting confirmed, Teams link added"
+                }
+            ],
+            "INPUT-004": [
+                {
+                    file: "deals/holistic-wellness/deal-state.md",
+                    desc: "Update deal state",
+                    writes: "Holistic Wellness meeting confirmed for Friday 4/3 at 11am CST; meeting context/goals"
+                },
+                {
+                    file: "ops/events/client-meetings/holistic-wellness-4-3.md",
+                    desc: "Create meeting event",
+                    writes: "Meeting date/time, attendees, prep notes, deal context"
+                },
+                {
+                    file: "ops/tasks/index.md",
+                    desc: "Create prep task",
+                    writes: "Task: prep for Holistic Wellness call (30-60 min before 11am); talking points/deck"
+                },
+                {
+                    file: "memory/2026-04-01.md",
+                    desc: "Memory log",
+                    writes: "Sarah confirmed Holistic Wellness meeting for 4/3"
+                }
+            ],
+            "INPUT-005": [
+                {
+                    file: "deals/pyramids-pharmacy/deal-state.md",
+                    desc: "Update deal state",
+                    writes: "Pyramids meeting date pending (April or May); Richmond requesting confirmation"
+                },
+                {
+                    file: "ops/tasks/index.md",
+                    desc: "Create decision task",
+                    writes: "Task: confirm Pyramids meeting date with Leihlani (April vs May options)"
+                },
+                {
+                    file: "memory/2026-04-01.md",
+                    desc: "Memory log",
+                    writes: "Pyramids meeting scheduling in progress; awaiting date confirmation"
+                }
+            ]
+        };
+
+        let selectedInput = null;
+        let selectedOutput = null;
+
+        function renderInputSelector() {
+            const sorted = [...inputs].sort((a, b) => {
+                return new Date(a.time.replace(' CT', '')) - new Date(b.time.replace(' CT', ''));
+            });
+
+            const selector = document.getElementById('inputSelector');
+            selector.innerHTML = sorted.map(input => `
+                <div class="input-option ${selectedInput === input.id ? 'selected' : ''}" onclick="selectInput('${input.id}')">
+                    <div style="font-weight: bold; font-size: 0.9em;">${input.subject.substring(0, 35)}</div>
+                    <div style="font-size: 0.8em; color: #999;">${input.time}</div>
+                </div>
+            `).join('');
+        }
+
+        function selectInput(inputId) {
+            selectedInput = inputId;
+            selectedOutput = null;
+            showInputDetails(inputId);
+            showOutputs(inputId);
+            renderInputSelector();
+        }
+
+        function showInputDetails(inputId) {
+            const input = inputs.find(i => i.id === inputId);
+            const div = document.getElementById('inputDetailsDiv');
+
+            div.innerHTML = `
+                <div><strong>ID:</strong> ${input.id}</div>
+                <div><strong>Time:</strong> ${input.time}</div>
+                <div><strong>Type:</strong> ${input.type.toUpperCase()}</div>
+                <div><strong>From:</strong> ${input.from}</div>
+                <hr>
+                <div><strong>Subject:</strong></div>
+                <div style="color: #5a9fd4; margin: 4px 0;">${input.subject}</div>
+                <hr>
+                <div><strong>Content:</strong></div>
+                <div style="color: #ccc; font-size: 0.85em; margin-top: 4px;">${input.preview}</div>
+            `;
+        }
+
+        function showOutputs(inputId) {
+            const outputs = outputMappings[inputId] || [];
+            const list = document.getElementById('outputsList');
+
+            if (outputs.length === 0) {
+                list.innerHTML = '<p style="color: #888; padding: 10px;">No outputs mapped</p>';
+                return;
+            }
+
+            list.innerHTML = outputs.map((output, idx) => `
+                <div class="output-item ${selectedOutput === idx ? 'selected' : ''}" onclick="selectOutput('${inputId}', ${idx})">
+                    <div class="output-file">${output.file}</div>
+                    <div class="output-desc">${output.desc}</div>
+                </div>
+            `).join('');
+        }
+
+        function selectOutput(inputId, outputIdx) {
+            selectedOutput = outputIdx;
+            showOutputDetails(inputId, outputIdx);
+            showOutputs(inputId);
+        }
+
+        function showOutputDetails(inputId, outputIdx) {
+            const outputs = outputMappings[inputId] || [];
+            const output = outputs[outputIdx];
+
+            if (!output) return;
+
+            const div = document.getElementById('outputDetailsDiv');
+            div.innerHTML = `
+                <div class="detail-section">
+                    <div style="font-weight: bold; font-size: 1.05em; margin-bottom: 8px; color: #5a9fd4;">${output.file}</div>
+                    <div style="font-size: 0.95em; color: #bbb; margin-bottom: 12px;">${output.desc}</div>
+                    <hr style="border: none; border-top: 1px solid #555; margin: 12px 0;">
+                    <div style="margin-top: 12px;">
+                        <div style="font-weight: bold; color: #5a9fd4; margin-bottom: 8px; font-size: 0.95em;">What gets written:</div>
+                        <div style="font-size: 0.95em; color: #ddd; line-height: 1.7;">${output.writes}</div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function resetToEarliest() {
+            selectedInput = null;
+            selectedOutput = null;
+            document.getElementById('batchName').value = '';
+            document.getElementById('inputDetailsDiv').innerHTML = '<p style="color: #888;">Select an input to view details</p>';
+            document.getElementById('outputsList').innerHTML = '<p style="color: #888; padding: 10px;">Select an input to see where info gets written</p>';
+            document.getElementById('outputDetailsDiv').innerHTML = '<p style="color: #888; padding: 10px;">Click an output destination to see details</p>';
+            renderInputSelector();
+        }
+
+        function createNewBatch() {
+            alert('Batch saved!');
+        }
+
+        function clearSelection() {
+            resetToEarliest();
+        }
+
+        // Initialize
+        renderInputSelector();
+    </script>
+</body>
+</html>
