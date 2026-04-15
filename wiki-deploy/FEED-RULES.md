@@ -2,13 +2,19 @@
 
 This file governs how feed channel inputs are handled. The wiki schema (`wiki-schema.md`) governs compilation details.
 
+## Pipeline Orchestration
+
+**The feed pipeline is orchestrated by `feed-pipeline.lobster`.** When a feed input arrives, invoke the Lobster tool to run the pipeline. Do not self-orchestrate the steps below — the Lobster workflow handles sequencing, file reading, and prompt injection. Your job within each Lobster step is to execute the creative work (compile, score, assess) with the context that has been provided to you.
+
+All required prompt files (wiki-schema.md, scoring-prompt.md, scoring-methodology.md, scoring-services.md, needs-assessment-prompt.md) are read by the pipeline and injected into your context. Do not re-read files marked with `=== ... (MANDATORY) ===` delimiters — they are already loaded.
+
 ---
 
-## When an Input Arrives in Any Feed Channel
+## Pipeline Steps (for reference)
 
 ### 1. DEDUP CHECK
 - Hash the input, check `clearwater/feeds/.processed-inputs.jsonl`
-- If duplicate → DM Austin "Already processed" + `NO_REPLY` in feed. Stop.
+- If duplicate → DM Austin "Already processed". Stop.
 
 ### 2. CAPTURE
 - Append to `raw/YYYY-MM-DD.md` in this format:
@@ -27,6 +33,7 @@ subject: [if email]
 - Log hash to `.processed-inputs.jsonl`
 
 ### 3. TRIAGE
+Classify the input:
 
 **URGENT** if ANY of:
 - Client or prospect asking a direct question or requesting action
@@ -36,24 +43,29 @@ subject: [if email]
 
 **NORMAL** — everything else.
 
-### 4. IF URGENT
-- Read relevant `wiki/` articles (check `wiki/index.md` first)
-- If there are uncompiled raw inputs relevant to this topic, compile them into the wiki first (quick targeted compile)
-- Draft response or action inline in Austin's DM
-- Post to Ops Log: `CAPTURE + TRIAGE: URGENT + DRAFT`
-- Then proceed to Step 6.
+Also classify: is it a transcript? Does it update a deal?
 
-### 5. IF NORMAL
-- One-line ack to Austin's DM: "Captured [brief summary]. Compiling."
-- Post to Ops Log: `CAPTURE + TRIAGE: NORMAL`
-- Then proceed to Step 6.
+### 4. NOTIFY
+- DM Austin with capture acknowledgment
+- Post initial entry to Ops Log
 
-### 6. COMPILE
-- After every capture (urgent or normal), run compile immediately.
-- Load `wiki-schema.md`. Process the new raw entry just captured.
-- Update wiki articles, index, and log.
-- DM Austin with compile summary when done.
-- Post to Ops Log: `COMPILE: [summary]`
+### 5. COMPILE
+- wiki-schema.md content is injected by the pipeline — follow it exactly.
+- Identify which wiki articles the input touches (check the index).
+- Read those articles, update or create per the schema.
+- Maintain bidirectional wikilinks and related fields.
+- Update wiki/index.md.
+- Prepend entry to wiki/log.md.
+
+### 6. SCORE (if transcript)
+- scoring-prompt.md, scoring-methodology.md, and scoring-services.md are injected by the pipeline.
+- Apply P2V2C2 rubric, produce 12-element deal ledger.
+- Write to scores.jsonl, DM Austin.
+
+### 7. NEEDS ASSESSMENT (if deal article updated)
+- needs-assessment-prompt.md is injected by the pipeline.
+- Follow its analytical process, produce output if warranted.
+- Also runs on cron (1-2x daily) and on explicit ask.
 
 ---
 
@@ -69,9 +81,7 @@ When an email thread arrives:
 
 ## What This File Does NOT Cover
 
-- **Scoring** — handled by the analysis/query layer on demand
-- **Drafting** — handled on demand when Austin asks or when triage flags urgent
 - **Salesforce updates** — handled by the SF sync cron reading from the wiki
-- **Verification** — the compile step is self-verifying; the lint cron checks wiki integrity
+- **Verification** — the lint cron checks wiki integrity
 
-The pipeline is: **capture → compile → query/act**. This file handles capture and immediate compile. The compile cron (when active) handles any inputs missed by this step.
+The pipeline is: **capture → compile → (score if transcript) → (needs assessment if deal) → ops log**. This is orchestrated by `feed-pipeline.lobster`.

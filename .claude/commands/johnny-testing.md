@@ -76,14 +76,19 @@ Only after all seven: report what the run did, what it cost, and which stages su
 
 ## Response format during testing (STRICT — enforced)
 
-Austin can see the run detail page in Obsidian. Don't recap what he's already looking at. The response format is locked:
+Austin can see the run detail page in Obsidian. Don't recap what he's already looking at. The response format is locked to this section order (reordered 2026-04-14 late night):
 
 1. **Scoreboard** — reference, don't re-render. ("See scoreboard ↑" or skip entirely.)
-2. **Blocked tool calls** — scan compile + output session jsonls for `isError: true` or errored `toolResult` events. "None" if clean; otherwise list one-line each.
-3. **For each red (over-goal) stage** — one sentence on root cause (actual mechanism, not a restated metric), one sentence on the concrete fix (file to edit + setting/change + expected new number). If the step's purpose isn't obvious from its name, one-line affirmation first.
-4. **Questions** — short, any open items.
+2. **Blocked tool calls** — scan compile + output session jsonls for `isError: true` or `details.status == "error"` events. "None" if clean; otherwise list one-line each.
+3. **Questions** — short, any open items. Placed BEFORE root-cause/fix so Austin's answers can reshape the proposed fix before I commit to it.
+4. **For each red (over-goal) stage** — one sentence on root cause (actual mechanism, not a restated metric), one sentence on the concrete fix (file to edit + setting/change + expected new number). Green stages get zero mention. If the step's purpose isn't obvious from its name, one-line affirmation first.
+5. **Karpathy reasoning** — one line each, actively engaging all four principles with respect to the fix just proposed:
+   - **Think before coding:** one-sentence success criterion + smallest fix
+   - **Simplicity first:** minimum files/lines touched; flag if >1–2
+   - **Surgical changes:** no adjacent refactors / scope creep
+   - **Verify before stopping:** the success criterion the next test run will verify against
 
-Total ceiling: a few sentences. If the response is paragraphs, it's wrong. See memory `feedback_testing_response_format.md` for the full spec and the reason it exists.
+Total ceiling for sections 1–4: a few sentences. Section 5 adds 4 more lines. Cross-session findings that aren't in the run file (e.g. feed-sink NO_REPLY leaks, log.md contamination) surface in section 3 as a question (if the fix is unclear) or section 4 as an unscored "red" line (if the fix is obvious) — do not invent a new section. See memory `feedback_testing_response_format.md` for the full spec and the reason it exists.
 
 ## Dashboard verification (after the 7-step walk)
 
