@@ -146,7 +146,11 @@
       "WebFetch(domain:docs.langchain.com)",
       "mcp__plugin_telegram_telegram__react",
       "mcp__plugin_telegram_telegram__edit_message",
-      "mcp__plugin_telegram_telegram__download_attachment"
+      "mcp__plugin_telegram_telegram__download_attachment",
+      "Bash(rm /tmp/patch-mb-tasks-readonly.py)",
+      "Skill(update-config)",
+      "Bash(rm /tmp/patch-restore-fix.py)",
+      "Bash(rm /tmp/patch-undo-delay.py)"
     ],
     "additionalDirectories": [
       "/private/tmp"
